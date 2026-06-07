@@ -4,6 +4,9 @@
 package protocol
 
 import (
+	"bytes"
+	"encoding/binary"
+	"errors"
 	"fmt"
 )
 
@@ -183,6 +186,13 @@ func bytesEqual(a, b []byte) bool {
 	return true
 }
 
+// ============ 辅助函数 ============
+
+// encodeFrame 辅助函数：编码协议帧
+func encodeFrame(cmd uint8, key, value []byte) ([]byte, error) {
+	return EncodeRequest(cmd, key, value)
+}
+
 // ============ 默认包变量 ============
 
 // DefaultKeyLen 默认Key长度
@@ -190,3 +200,217 @@ var DefaultKeyLen uint32 = 256
 
 // DefaultValueLen 默认Value长度
 var DefaultValueLen uint32 = 1024
+
+// ============ 序列化/反序列化函数 ============
+
+// EncodeRequest 序列化请求
+// 返回error: 参数为空、长度超限、序列化失败等错误
+func EncodeRequest(cmd uint8, key, value []byte) ([]byte, error) {
+	// 检查参数
+	if key == nil {
+		return nil, fmt.Errorf("key cannot be nil")
+	}
+	if len(key) > int(MaxKeyLength) {
+		return nil, fmt.Errorf("key length %d exceeds max %d", len(key), MaxKeyLength)
+	}
+	if value == nil {
+		value = []byte{}
+	}
+	if len(value) > int(MaxValueLength) {
+		return nil, fmt.Errorf("value length %d exceeds max %d", len(value), MaxValueLength)
+	}
+
+	// 创建缓冲区
+	buf := new(bytes.Buffer)
+
+	// 写入命令码 (1字节)
+	if err := buf.WriteByte(cmd); err != nil {
+		return nil, fmt.Errorf("failed to write command: %w", err)
+	}
+
+	// 写入Key长度 (4字节，大端字节序)
+	if err := binary.Write(buf, binary.BigEndian, uint32(len(key))); err != nil {
+		return nil, fmt.Errorf("failed to write key length: %w", err)
+	}
+
+	// 写入Value长度 (4字节，大端字节序)
+	if err := binary.Write(buf, binary.BigEndian, uint32(len(value))); err != nil {
+		return nil, fmt.Errorf("failed to write value length: %w", err)
+	}
+
+	// 写入Key数据
+	if _, err := buf.Write(key); err != nil {
+		return nil, fmt.Errorf("failed to write key data: %w", err)
+	}
+
+	// 写入Value数据
+	if _, err := buf.Write(value); err != nil {
+		return nil, fmt.Errorf("failed to write value data: %w", err)
+	}
+
+	return buf.Bytes(), nil
+}
+
+// DecodeRequest 反序列化请求
+// 返回error: 数据不足、校验失败、解析错误等错误
+func DecodeRequest(data []byte) (*ProtocolFrame, error) {
+	if data == nil {
+		return nil, fmt.Errorf("input data is nil")
+	}
+
+	// 检查数据长度是否足够
+	if len(data) < int(FrameHeaderSize) {
+		return nil, fmt.Errorf("data too short: %d bytes, need at least %d bytes", len(data), FrameHeaderSize)
+	}
+
+	// 解析帧头
+	cmd := data[0]
+	keyLen := binary.BigEndian.Uint32(data[1:5])
+	valueLen := binary.BigEndian.Uint32(data[5:9])
+
+	// 检查剩余数据长度
+	totalSize := int(FrameHeaderSize) + int(keyLen) + int(valueLen)
+	if len(data) < totalSize {
+		return nil, fmt.Errorf("data length mismatch: %d bytes, expected %d bytes", len(data), totalSize)
+	}
+
+	// 提取Key和Value
+	key := data[9 : 9+int(keyLen)]
+	value := data[9+int(keyLen) : 9+int(keyLen)+int(valueLen)]
+
+	// 创建帧
+	frame := &ProtocolFrame{
+		Command: cmd,
+		KeyLen:  keyLen,
+		ValueLen: valueLen,
+		Key:     key,
+		Value:   value,
+	}
+
+	return frame, nil
+}
+
+// EncodeResponse 序列化响应
+// 返回error: 序列化失败等错误
+func EncodeResponse(cmd uint8, status uint8, value []byte) ([]byte, error) {
+	// 检查参数
+	if value == nil {
+		value = []byte{}
+	}
+	if len(value) > int(MaxValueLength) {
+		return nil, fmt.Errorf("value length %d exceeds max %d", len(value), MaxValueLength)
+	}
+
+	// 创建缓冲区
+	buf := new(bytes.Buffer)
+
+	// 写入命令码 (1字节)
+	if err := buf.WriteByte(cmd); err != nil {
+		return nil, fmt.Errorf("failed to write command: %w", err)
+	}
+
+	// 写入Key长度 (4字节，大端字节序)
+	if err := binary.Write(buf, binary.BigEndian, uint32(0)); err != nil {
+		return nil, fmt.Errorf("failed to write key length: %w", err)
+	}
+
+	// 写入Value长度 (4字节，大端字节序)
+	if err := binary.Write(buf, binary.BigEndian, uint32(len(value))); err != nil {
+		return nil, fmt.Errorf("failed to write value length: %w", err)
+	}
+
+	// 写入状态码 (1字节)
+	if err := buf.WriteByte(status); err != nil {
+		return nil, fmt.Errorf("failed to write status: %w", err)
+	}
+
+	// 写入Value数据
+	if _, err := buf.Write(value); err != nil {
+		return nil, fmt.Errorf("failed to write value data: %w", err)
+	}
+
+	return buf.Bytes(), nil
+}
+
+// DecodeResponse 反序列化响应
+// 返回error: 数据不足、校验失败、解析错误等错误
+func DecodeResponse(data []byte) (*ProtocolFrame, error) {
+	if data == nil {
+		return nil, fmt.Errorf("input data is nil")
+	}
+
+	// 检查数据长度是否足够
+	if len(data) < int(FrameHeaderSize) {
+		return nil, fmt.Errorf("data too short: %d bytes, need at least %d bytes", len(data), FrameHeaderSize)
+	}
+
+	// 解析帧头
+	cmd := data[0]
+	keyLen := binary.BigEndian.Uint32(data[1:5])
+	valueLen := binary.BigEndian.Uint32(data[5:9])
+
+	// 检查剩余数据长度
+	totalSize := int(FrameHeaderSize) + int(keyLen) + int(valueLen)
+	if len(data) < totalSize {
+		return nil, fmt.Errorf("data length mismatch: %d bytes, expected %d bytes", len(data), totalSize)
+	}
+
+	// 提取状态码和Value
+	status := data[9]
+	value := data[10 : 10+int(valueLen)]
+
+	// 创建响应帧（响应帧的Key为空）
+	frame := &ProtocolFrame{
+		Command: cmd,
+		KeyLen:  keyLen,
+		ValueLen: valueLen,
+		Key:     []byte{},
+		Value:   value,
+	}
+
+	// 注意：响应帧没有额外存储status，status在解码后可从其他地方获取
+	// 这里我们将status附加到Value中，方便解析
+	// 修改Value，将其变成 "status:value" 格式
+	frame.Value = append([]byte{status}, value...)
+
+	return frame, nil
+}
+
+// ValidateFrame 验证协议帧有效性
+// 返回error: 帧长度不足、Key/Value长度不匹配等错误
+func ValidateFrame(frame *ProtocolFrame) error {
+	if frame == nil {
+		return errors.New("frame is nil")
+	}
+
+	// 检查命令码是否合法
+	validCommands := map[uint8]bool{
+		uint8(CMD_GET):    true,
+		uint8(CMD_SET):    true,
+		uint8(CMD_DELETE): true,
+		uint8(CMD_INFO):   true,
+	}
+	if !validCommands[frame.Command] {
+		return fmt.Errorf("invalid command: 0x%02X", frame.Command)
+	}
+
+	// 检查Key长度是否超过限制
+	if frame.KeyLen > MaxKeyLength {
+		return fmt.Errorf("key length %d exceeds max %d", frame.KeyLen, MaxKeyLength)
+	}
+
+	// 检查Value长度是否超过限制
+	if frame.ValueLen > MaxValueLength {
+		return fmt.Errorf("value length %d exceeds max %d", frame.ValueLen, MaxValueLength)
+	}
+
+	// 检查数据长度是否匹配
+	if len(frame.Key) != int(frame.KeyLen) {
+		return fmt.Errorf("key length mismatch: expected %d, got %d", frame.KeyLen, len(frame.Key))
+	}
+	if len(frame.Value) != int(frame.ValueLen) {
+		return fmt.Errorf("value length mismatch: expected %d, got %d", frame.ValueLen, len(frame.Value))
+	}
+
+	return nil
+}
