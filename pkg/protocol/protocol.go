@@ -376,40 +376,114 @@ func DecodeResponse(data []byte) (*ProtocolFrame, error) {
 	return frame, nil
 }
 
+// ============ 帧校验错误类型 ============
+
+// FrameError 协议帧校验错误，关联已有的 ErrorCode 常量
+// 调用方可通过类型断言提取 ErrorCode 进行程序化判断
+type FrameError struct {
+	Code    ErrorCode
+	Message string
+}
+
+// Error 实现 error 接口
+func (e *FrameError) Error() string {
+	return fmt.Sprintf("%s: %s", e.Code.String(), e.Message)
+}
+
+// GetErrorCode 从 error 中提取 ErrorCode
+// 若错误为 *FrameError 则返回其 Code，否则返回 ERROR_UNKNOWN_COMMAND
+func GetErrorCode(err error) ErrorCode {
+	if fe, ok := err.(*FrameError); ok {
+		return fe.Code
+	}
+	return ERROR_UNKNOWN_COMMAND
+}
+
+// ============ 帧校验函数 ============
+
 // ValidateFrame 验证协议帧有效性
-// 返回error: 帧长度不足、Key/Value长度不匹配等错误
+// 校验内容：nil帧检查、命令码合法性、帧总长度、Key/Value长度限制、
+// KeyLen/ValueLen与实际数据一致性、命令特定参数要求
+// 返回error: 使用 FrameError 包装对应 ErrorCode，便于调用方程序化处理
 func ValidateFrame(frame *ProtocolFrame) error {
+	// nil帧检查
 	if frame == nil {
 		return errors.New("frame is nil")
 	}
 
-	// 检查命令码是否合法
-	validCommands := map[uint8]bool{
-		uint8(CMD_GET):    true,
-		uint8(CMD_SET):    true,
-		uint8(CMD_DELETE): true,
-		uint8(CMD_INFO):   true,
-	}
-	if !validCommands[frame.Command] {
-		return fmt.Errorf("invalid command: 0x%02X", frame.Command)
+	// 1. 检查命令码是否合法
+	cmd := Command(frame.Command)
+	switch cmd {
+	case CMD_GET, CMD_SET, CMD_DELETE, CMD_INFO:
+		// 合法命令
+	default:
+		return &FrameError{
+			Code:    ERROR_UNKNOWN_COMMAND,
+			Message: fmt.Sprintf("invalid command: 0x%02X", frame.Command),
+		}
 	}
 
-	// 检查Key长度是否超过限制
+	// 2. 检查帧总长度是否小于帧头大小
+	totalSize := frame.FrameSize()
+	if totalSize < uint32(FrameHeaderSize) {
+		return &FrameError{
+			Code:    ERROR_FRAME_TOO_SHORT,
+			Message: fmt.Sprintf("frame total size %d is less than header size %d", totalSize, FrameHeaderSize),
+		}
+	}
+
+	// 3. 检查Key长度是否超过限制
 	if frame.KeyLen > MaxKeyLength {
-		return fmt.Errorf("key length %d exceeds max %d", frame.KeyLen, MaxKeyLength)
+		return &FrameError{
+			Code:    ERROR_INVALID_KEY,
+			Message: fmt.Sprintf("key length %d exceeds max %d", frame.KeyLen, MaxKeyLength),
+		}
 	}
 
-	// 检查Value长度是否超过限制
+	// 4. 检查Value长度是否超过限制
 	if frame.ValueLen > MaxValueLength {
-		return fmt.Errorf("value length %d exceeds max %d", frame.ValueLen, MaxValueLength)
+		return &FrameError{
+			Code:    ERROR_INVALID_VALUE,
+			Message: fmt.Sprintf("value length %d exceeds max %d", frame.ValueLen, MaxValueLength),
+		}
 	}
 
-	// 检查数据长度是否匹配
+	// 5. 检查KeyLen与实际Key数据长度一致性
 	if len(frame.Key) != int(frame.KeyLen) {
-		return fmt.Errorf("key length mismatch: expected %d, got %d", frame.KeyLen, len(frame.Key))
+		return &FrameError{
+			Code:    ERROR_FRAME_MISMATCH,
+			Message: fmt.Sprintf("key length mismatch: header declares %d, actual data is %d", frame.KeyLen, len(frame.Key)),
+		}
 	}
+
+	// 6. 检查ValueLen与实际Value数据长度一致性
 	if len(frame.Value) != int(frame.ValueLen) {
-		return fmt.Errorf("value length mismatch: expected %d, got %d", frame.ValueLen, len(frame.Value))
+		return &FrameError{
+			Code:    ERROR_FRAME_MISMATCH,
+			Message: fmt.Sprintf("value length mismatch: header declares %d, actual data is %d", frame.ValueLen, len(frame.Value)),
+		}
+	}
+
+	// 7. 命令特定校验
+	switch cmd {
+	case CMD_GET, CMD_DELETE:
+		// GET/DELETE命令需要非空Key
+		if frame.KeyLen == 0 || len(frame.Key) == 0 {
+			return &FrameError{
+				Code:    ERROR_INVALID_KEY,
+				Message: fmt.Sprintf("%s command requires a non-empty key", cmd.String()),
+			}
+		}
+	case CMD_SET:
+		// SET命令需要非空Key
+		if frame.KeyLen == 0 || len(frame.Key) == 0 {
+			return &FrameError{
+				Code:    ERROR_INVALID_KEY,
+				Message: "SET command requires a non-empty key",
+			}
+		}
+	case CMD_INFO:
+		// INFO命令无额外参数要求
 	}
 
 	return nil
