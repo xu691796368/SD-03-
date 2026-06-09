@@ -1,4 +1,4 @@
-# SD-03分布式缓存系统 - 文档索引
+# SD-03 分布式缓存系统 - 文档索引
 
 本文档索引列出了SD-03项目的所有相关文档及其链接。
 
@@ -24,7 +24,7 @@
 - 架构概览：客户端→协议编解码→TCP服务器→一致性哈希→缓存节点→主从复制
 - 模块划分：6个核心模块的详细设计和接口定义
 - 数据模型：协议帧、LRU缓存、哈希环、缓存节点等数据结构
-- 技术选型：Go 1.26.4、大端字节序、自定义双向链表等
+- 技术选型：Go 1.26.4、大端字节序、双向链表等
 - 约束要求：功能、性能、测试、代码质量约束
 
 **关键设计决策**：
@@ -39,11 +39,10 @@
 ### 3. 任务文档（Tasks）
 
 **[tasks.md](./tasks/tasks.md)** - 开发任务分解
-- Phase 1：基础架构（7个任务）
-- Phase 2：核心功能（32个任务）
-- Phase 3：测试与优化（12个任务）
-- Phase 4：验收与交付（4个任务）
-- 总计44个细化任务
+- Phase 1：基础架构（6个任务）
+- Phase 2：核心功能（7个任务）
+- Phase 3：测试与优化（11个任务）
+- Phase 4：验收与交付（1个任务）
 
 **任务特点**：
 - 任务粒度细化到单个Go源码文件或函数级别
@@ -57,35 +56,32 @@
 
 ## 项目代码结构
 
-### 代码目录（pkg/）
+### 核心代码（pkg/）
 
-- **pkg/specs/** - LRU缓存模块
-  - `specs.go` - LRU缓存接口定义和实现
-  - `lru.go` - 自定义双向链表实现
+| 模块 | 目录 | 源码文件 | 说明 |
+|------|------|---------|------|
+| LRU缓存 | `pkg/cache/` | `cache.go` | LRU缓存实现（双向链表+哈希表） |
+| 协议编解码 | `pkg/protocol/` | `protocol.go` | 二进制协议定义与编解码 |
+| 一致性哈希 | `pkg/shard/` | `shard.go` | 哈希环与虚拟节点 |
+| 缓存节点 | `pkg/node/` | `node.go` | 节点管理（集成LRU+哈希环） |
+| TCP服务器 | `pkg/server/` | `server.go` | TCP服务器核心实现 |
+| 主从复制 | `pkg/replication/` | `replication.go` | 复制控制器实现 |
 
-- **pkg/shard/** - 一致性哈希分片模块
-  - `ring.go` - 哈希环实现
-  - `node.go` - 虚拟节点定义
+> 每个模块的单元测试（`*_test.go`）遵循Go惯例，与源码放在同一目录下。
 
-- **pkg/protocol/** - 协议编解码模块
-  - `codec.go` - 序列化/反序列化实现
-  - `types.go` - 协议类型定义
+### 主程序入口（cmd/）
 
-- **pkg/server/** - TCP服务器模块
-  - `server.go` - TCP服务器核心实现
-  - `handler.go` - 请求处理器
-
-- **pkg/replication/** - 主从复制模块
-  - `replication.go` - 复制控制器实现
-
-### 主程序入口（cmd/specs-server/）
-
-- `cmd/specs-server/main.go` - 主程序入口，初始化TCPServer并启动服务
+| 程序 | 目录 | 入口文件 | 说明 |
+|------|------|---------|------|
+| 缓存服务器 | `cmd/cache-server/` | `main.go` | 服务器启动入口 |
+| CLI测试客户端 | `cmd/test-client/` | `main.go` | 交互式测试工具（嵌入式集群） |
 
 ### 测试目录（tests/）
 
-- `tests/test_client.go` - TCP客户端测试工具
-- `tests/*_test.go` - 单元测试和集成测试
+| 目录 | 文件 | 说明 |
+|------|------|------|
+| `tests/client/` | `test_client.go`, `test_client_test.go` | 测试客户端工具库与完整测试套件 |
+| `tests/integration/` | `integration_test.go`, `advanced_test.go` | 端到端集成测试与高级测试 |
 
 ---
 
@@ -94,9 +90,7 @@
 ```
 proposal.md (项目提案)
     │
-    ├── 5.3 项目结构 ───> 更新为包含docs/目录
-    │
-    └── 关联文档 ───────> docs/specs/specs.md (需求规格)
+    ├── 关联文档 ───────> docs/specs/specs.md (需求规格)
                           │
                           ├── 对应 design/design.md (设计文档)
                           │   ├── 架构概览
@@ -105,10 +99,10 @@ proposal.md (项目提案)
                           │   └── 接口定义
                           │
                           └── 对应 tasks/tasks.md (任务文档)
-                              ├── Phase 1: 基础架构 (7任务)
+                              ├── Phase 1: 基础架构 (6任务)
                               ├── Phase 2: 核心功能 (7任务)
-                              ├── Phase 3: 测试与优化 (12任务)
-                              └── Phase 4: 验收与交付 (4任务)
+                              ├── Phase 3: 测试与优化 (11任务)
+                              └── Phase 4: 验收与交付 (1任务)
 ```
 
 ---
@@ -137,11 +131,12 @@ proposal.md (项目提案)
 
 ## 文档版本
 
+- **proposal.md**: v4.0
 - **specs.md**: v2.0
 - **design.md**: v2.0
-- **tasks.md**: v2.0
-- **docs/README.md**: v1.0
+- **tasks.md**: v3.0
+- **docs/README.md**: v2.0
 
 **创建日期**: 2026-06-06
-**最后更新**: 2026-06-06
+**最后更新**: 2026-06-09
 **维护者**: SD-03项目组
